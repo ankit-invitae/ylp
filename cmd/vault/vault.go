@@ -10,37 +10,33 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/google/uuid"
 	"github.com/hashicorp/vault/api"
 	"github.com/invitae-ankit/ylp/util"
-	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 )
 
-var (
-	username string
-	password string
-	clientId []string
-)
+var clientIds []string
 
-const vaultAddr = "https://vault.dev.locusdev.net/"
-
-type Vault struct {
+type VaultResponse struct {
 	Tokens string `json:"berossus_tokens"`
 }
 
-// vaultCmd represents the vault command
-var Cmd = &cobra.Command{
-	Use:   "vault",
-	Short: "Vault related helper commands",
-	Run: func(cmd *cobra.Command, args []string) {
-		process()
-	},
-}
+const vaultAddr = "https://vault.dev.locusdev.net/"
 
-func init() {
-	Cmd.Flags().StringSliceVarP(&clientId, "ids", "i", []string{}, "Client ids for which berossus token needs to be created. Ex. jane.doe,john.doe")
-	Cmd.MarkFlagRequired("ids")
+func New() *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:   "vault",
+		Short: "Vault related helper commands",
+		Run: func(cmd *cobra.Command, args []string) {
+			process()
+		},
+	}
+	cmd.Flags().StringSliceVarP(&clientIds, "ids", "i", []string{}, "Client ids for which berossus token needs to be created. Ex. jane.doe,john.doe")
+	cmd.MarkFlagRequired("ids")
+
+	return cmd
 }
 
 func process() {
@@ -54,7 +50,7 @@ func process() {
 	}
 	respData, _ := json.Marshal(data)
 
-	var currentData Vault
+	var currentData VaultResponse
 	json.Unmarshal(respData, &currentData)
 	currentTokens := currentData.Tokens
 
@@ -68,7 +64,7 @@ func process() {
 	tokenSlice := strings.Split(currentTokens, "\n")
 
 	var newTokens []string
-	for _, id := range clientId {
+	for _, id := range clientIds {
 		newTokenString := fmt.Sprintf(`\""%s"\" \""%s"\"`, id, uuid.New().String())
 		newTokens = append(newTokens, newTokenString)
 	}
@@ -113,7 +109,7 @@ func getTokenFromFile(client *api.Client) (map[string]interface{}, error) {
 }
 
 func getTokenFromWeb(client *api.Client) map[string]interface{} {
-	getCredentials()
+	username, password := getCredentials()
 	fmt.Println("Getting token from Web")
 	path := fmt.Sprintf("auth/ldap/login/%s", username)
 
@@ -143,53 +139,39 @@ func saveTofile(file *os.File, data string) {
 	defer file.Close()
 }
 
-func getCredentials() {
-	usernamePrompt := promptui.Prompt{
-		Label: "username",
-		Validate: func(input string) error {
-			if len(strings.TrimSpace(input)) == 0 {
-				return fmt.Errorf("username cannot be blank")
-			}
-			return nil
+func getCredentials() (string, string) {
+	var qs = []*survey.Question{
+		{
+			Name:     "username",
+			Prompt:   &survey.Input{Message: "Enter Username:"},
+			Validate: survey.Required,
+		},
+		{
+			Name:     "password",
+			Prompt:   &survey.Password{Message: "Enter Password:"},
+			Validate: survey.Required,
 		},
 	}
 
-	var err error
-	username, err = usernamePrompt.Run()
-	util.HandleError(err)
-	username = strings.TrimSpace(username)
+	answers := struct {
+		Username string
+		Password string
+	}{}
 
-	passwordPrompt := promptui.Prompt{
-		Label: "password",
-		Validate: func(input string) error {
-			if len(strings.TrimSpace(input)) == 0 {
-				return fmt.Errorf("password cannot be blank")
-			}
-			return nil
-		},
-		Mask: '*',
-	}
-
-	err = nil
-	password, err = passwordPrompt.Run()
+	err := survey.Ask(qs, &answers)
 	util.HandleError(err)
-	password = strings.TrimSpace(password)
+	return strings.TrimSpace(answers.Username), answers.Password
 }
 
 func getConfirmationToUpload() bool {
-	uploadPrompt := promptui.Prompt{
-		Label: "Do you want to upload new tokens (y/n)?",
-		Validate: func(input string) error {
-			if input == "y" || input == "n" {
-				return nil
-			}
-			return fmt.Errorf("please enter either y/n")
-		},
+	prompt := &survey.Select{
+		Message: "Do you want to upload new tokens (y/n)?",
+		Options: []string{"yes", "no"},
 	}
 
-	value, err := uploadPrompt.Run()
-	util.HandleError(err)
-	return value == "y"
+	var upload string
+	survey.AskOne(prompt, &upload, survey.WithValidator(survey.Required))
+	return upload == "yes"
 }
 
 func uploadNewTokens(client *api.Client, data string) {

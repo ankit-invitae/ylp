@@ -16,17 +16,17 @@ var (
 	clientOptions client.ClientOpts
 )
 
-var Cmd = &cobra.Command{
-	Use:   "rancher",
-	Short: "Rancher related helper commands",
-	Run: func(cmd *cobra.Command, args []string) {
-		process()
-	},
-}
-
-func init() {
-	Cmd.Flags().StringVarP(&stack, "stack", "s", "", "Name of the stack")
-	Cmd.MarkFlagRequired("stack")
+func New() *cobra.Command {
+	var cmd = &cobra.Command{
+		Use:   "rancher",
+		Short: "Rancher related helper commands",
+		Run: func(cmd *cobra.Command, args []string) {
+			process()
+		},
+	}
+	cmd.Flags().StringVarP(&stack, "stack", "s", "", "Name of the stack")
+	cmd.MarkFlagRequired("stack")
+	return cmd
 }
 
 func process() {

@@ -17,6 +17,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.AddCommand(vault.Cmd)
-	rootCmd.AddCommand(rancher.Cmd)
+	rootCmd.AddCommand(vault.New())
+	rootCmd.AddCommand(rancher.New())
 }
