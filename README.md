@@ -1,7 +1,6 @@
-#ylp
+# ylp
 
-Usage:
-: ylp [command]
+Usage: ylp [command]
 
 Available Commands:
 
@@ -16,8 +15,7 @@ Flags:
 
 ## Vault
 
-Usage:
-: ylp vault [flags]
+Usage: ylp vault [flags]
 
 ```bash
 Flags:
