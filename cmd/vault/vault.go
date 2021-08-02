@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -17,13 +16,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var clientIds []string
-
 type VaultResponse struct {
 	Tokens string `json:"berossus_tokens"`
 }
 
-const vaultAddr = "https://vault.dev.locusdev.net/"
+var (
+	clientIds []string
+	env       string
+	config    VaultConfig
+)
 
 func New() *cobra.Command {
 	var cmd = &cobra.Command{
@@ -34,30 +35,35 @@ func New() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVarP(&clientIds, "ids", "i", []string{}, "Client ids for which berossus token needs to be created. Ex. jane.doe,john.doe")
+	cmd.Flags().StringVarP(&env, "env", "e", "", "Vault environment name. Ex. dev prod")
 	cmd.MarkFlagRequired("ids")
 
 	return cmd
 }
 
 func process() {
+	// Check if env is provided. If not then get it
+	if env == "" {
+		env = getEnvName()
+	}
+	config = NewVaultConfig(env)
+
 	// get vault api client
 	client := getClient()
 
-	data, err := getTokenFromFile(client)
-	if err != nil {
-		fmt.Println("Token is not working, will try to generate new token")
-		data = getTokenFromWeb(client)
-	}
-	respData, _ := json.Marshal(data)
+	respData, err := getVaultData(client)
+	util.HandleError(err)
+
+	vaultData, _ := json.Marshal(respData)
 
 	var currentData VaultResponse
-	json.Unmarshal(respData, &currentData)
+	json.Unmarshal(vaultData, &currentData)
 	currentTokens := currentData.Tokens
 
 	// save current tokens to temp file
 	tempFile, err := os.CreateTemp("", "berossus_tokens_old_*.txt")
 	util.HandleError(err)
-	saveTofile(tempFile, currentTokens)
+	util.SaveTofile(tempFile, currentTokens)
 	fmt.Printf("Old tokens are saved in file: %s\n", tempFile.Name())
 
 	//Create new tokens and append them to the existing token list
@@ -75,7 +81,7 @@ func process() {
 	newFile, err := os.Create("berossus_tokens.txt")
 	tokens := strings.Join(tokenSlice, "\n")
 	util.HandleError(err)
-	saveTofile(newFile, tokens)
+	util.SaveTofile(newFile, tokens)
 	fmt.Printf("New tokens are saved in file: %s\n", newFile.Name())
 
 	if getConfirmationToUpload() {
@@ -86,31 +92,14 @@ func process() {
 func getClient() *api.Client {
 	var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-	client, err := api.NewClient(&api.Config{Address: vaultAddr, HttpClient: httpClient})
+	client, err := api.NewClient(&api.Config{Address: config.Addr, HttpClient: httpClient})
 	util.HandleError(err)
 	return client
 }
 
-func getTokenFromFile(client *api.Client) (map[string]interface{}, error) {
-	fmt.Println("Getting token from file")
-	homeDir, err := os.UserHomeDir()
-	util.HandleError(err)
-
-	// read token from file. If its unable to read it from file then return err
-	token, err := os.ReadFile(path.Join(homeDir, ".vault-token"))
-	if err != nil {
-		return nil, err
-	}
-
-	//set token
-	client.SetToken(string(token))
-	return getData(client)
-
-}
-
-func getTokenFromWeb(client *api.Client) map[string]interface{} {
+func setTokenFromWeb(client *api.Client) {
 	username, password := getCredentials()
-	fmt.Println("Getting token from Web")
+	fmt.Println("Getting token from web")
 	path := fmt.Sprintf("auth/ldap/login/%s", username)
 
 	secret, err := client.Logical().Write(path, map[string]interface{}{
@@ -118,15 +107,12 @@ func getTokenFromWeb(client *api.Client) map[string]interface{} {
 	})
 	util.HandleError(err)
 
+	//set token
 	client.SetToken(string(secret.Auth.ClientToken))
-
-	resp, err := getData(client)
-	util.HandleError(err)
-
-	return resp
 }
 
-func getData(client *api.Client) (map[string]interface{}, error) {
+func getVaultData(client *api.Client) (map[string]interface{}, error) {
+	setTokenFromWeb(client)
 	resp, err := client.Logical().Read("secret/lims/berossus")
 	if err != nil {
 		return nil, err
@@ -134,9 +120,15 @@ func getData(client *api.Client) (map[string]interface{}, error) {
 	return resp.Data, nil
 }
 
-func saveTofile(file *os.File, data string) {
-	file.WriteString(data)
-	defer file.Close()
+func getEnvName() string {
+	prompt := &survey.Select{
+		Message: "Please select Environment?",
+		Options: []string{"dev", "prod"},
+	}
+
+	var env string
+	survey.AskOne(prompt, &env, survey.WithValidator(survey.Required))
+	return env
 }
 
 func getCredentials() (string, string) {
@@ -164,8 +156,13 @@ func getCredentials() (string, string) {
 }
 
 func getConfirmationToUpload() bool {
+	msg := fmt.Sprintln("Do you want to upload new tokens to the following endpoints (y/n)?")
+	for _, url := range config.VaultUrls {
+		msg = msg + fmt.Sprintln("\t *", url)
+	}
+
 	prompt := &survey.Select{
-		Message: "Do you want to upload new tokens (y/n)?",
+		Message: msg,
 		Options: []string{"yes", "no"},
 	}
 
@@ -175,13 +172,8 @@ func getConfirmationToUpload() bool {
 }
 
 func uploadNewTokens(client *api.Client, data string) {
-	urls := map[string][]string{
-		"dev": {"secret/lims/berossus", "secret/lims/berossusTest"},
-		"prd": {"secret/lims/berossus", "secret/lims/berossus2", "secret/lims/berossus-dlo", "secret/lims/berossus-pipe"},
-	}
-
 	var wg sync.WaitGroup
-	for _, url := range urls["dev"] {
+	for _, url := range config.VaultUrls {
 		wg.Add(1)
 		go func(url string) {
 			defer wg.Done()

@@ -11,3 +11,8 @@ func HandleError(err error) {
 		os.Exit(1)
 	}
 }
+
+func SaveTofile(file *os.File, data string) {
+	file.WriteString(data)
+	defer file.Close()
+}
